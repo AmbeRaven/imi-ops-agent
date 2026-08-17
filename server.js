@@ -130,19 +130,63 @@ async function snapshot(page) {
   return { url, title, text, controls };
 }
 
-async function findByLabel(page, label) {
+async function firstMatching(candidates) {
+  for (const locator of candidates) {
+    const count = await locator.count().catch(() => 0);
+    if (!count) continue;
+    for (let i = 0; i < Math.min(count, 8); i++) {
+      const item = locator.nth(i);
+      if (await item.isVisible().catch(() => false)) return item;
+    }
+  }
+  return null;
+}
+
+async function findClickable(page, label) {
   const exact = label.trim();
-  const candidates = [
+  const locator = await firstMatching([
     page.getByRole('button', { name: exact, exact: false }),
     page.getByRole('link', { name: exact, exact: false }),
+    page.getByText(exact, { exact: false })
+  ]);
+  if (locator) return locator;
+  throw new Error(`Could not find a visible clickable control matching: ${label}`);
+}
+
+async function findFillable(page, label) {
+  const exact = label.trim();
+  const locator = await firstMatching([
+    page.getByRole('searchbox', { name: exact, exact: false }),
+    page.getByRole('textbox', { name: exact, exact: false }),
+    page.getByRole('combobox', { name: exact, exact: false }),
     page.getByLabel(exact, { exact: false }),
     page.getByPlaceholder(exact, { exact: false }),
-    page.getByText(exact, { exact: false })
-  ];
-  for (const locator of candidates) {
-    if (await locator.count().catch(() => 0)) return locator.first();
+    page.locator('input, textarea, [contenteditable="true"]').filter({ has: page.locator(':scope') })
+  ]);
+  if (locator) return locator;
+
+  // Last-resort fallback for common search fields whose accessible name is
+  // supplied inconsistently by the site (for example Google's `name=q`).
+  if (/search/i.test(exact)) {
+    const searchFallback = await firstMatching([
+      page.locator('textarea[name="q"]'),
+      page.locator('input[name="q"]'),
+      page.locator('input[type="search"]')
+    ]);
+    if (searchFallback) return searchFallback;
   }
-  throw new Error(`Could not find a visible control matching: ${label}`);
+  throw new Error(`Could not find an editable field matching: ${label}`);
+}
+
+async function findSelectable(page, label) {
+  const exact = label.trim();
+  const locator = await firstMatching([
+    page.getByRole('combobox', { name: exact, exact: false }),
+    page.getByLabel(exact, { exact: false }),
+    page.locator('select').filter({ has: page.locator(':scope') })
+  ]);
+  if (locator) return locator;
+  throw new Error(`Could not find a select/combobox matching: ${label}`);
 }
 
 async function executeTool(state, name, args) {
@@ -156,14 +200,14 @@ async function executeTool(state, name, args) {
     if (credentialPattern.test(args.label) || credentialPattern.test(args.value)) {
       return { paused: true, kind: 'takeover', reason: 'Sensitive credential field detected. Please enter it yourself in Live View.' };
     }
-    const locator = await findByLabel(page, args.label);
+    const locator = await findFillable(page, args.label);
     const type = await locator.getAttribute('type').catch(() => '');
     if (type === 'password') return { paused: true, kind: 'takeover', reason: 'Password entry requires manual takeover.' };
     await locator.fill(args.value);
     return { ok: true, page: await snapshot(page) };
   }
   if (name === 'select') {
-    const locator = await findByLabel(page, args.label);
+    const locator = await findSelectable(page, args.label);
     await locator.selectOption({ label: args.option }).catch(async () => {
       await locator.click();
       await page.getByRole('option', { name: args.option, exact: false }).first().click();
@@ -178,7 +222,7 @@ async function executeTool(state, name, args) {
     if (approvalPattern.test(args.label)) {
       return { paused: true, kind: 'approval', action: `Click “${args.label}”`, reason: 'This looks like a consequential or final action.' };
     }
-    const locator = await findByLabel(page, args.label);
+    const locator = await findClickable(page, args.label);
     await locator.click();
     await page.waitForTimeout(500);
     return { ok: true, page: await snapshot(page) };
@@ -269,7 +313,7 @@ app.post('/api/approve', async (req, res) => {
     let execution;
     if (call.name === 'click' || result.action?.startsWith('Click')) {
       const label = args.label || result.action?.match(/“(.+)”/)?.[1];
-      const locator = await findByLabel(state.page, label);
+      const locator = await findClickable(state.page, label);
       await locator.click();
       await state.page.waitForTimeout(700);
       execution = { approved: true, executed: true, page: await snapshot(state.page) };
