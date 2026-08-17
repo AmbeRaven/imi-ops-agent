@@ -1,0 +1,23 @@
+{
+  "businessName": "ʻIMI Analytics",
+  "pronunciation": "EE-mee Analytics",
+  "tagline": "Seek Deeper. Decide Smarter.",
+  "website": "https://imianalytics.com",
+  "email": "hello@imianalytics.com",
+  "location": "Oʻahu, Hawaiʻi",
+  "businessType": "Data and analytics consulting",
+  "services": [
+    "Analytics Architecture",
+    "Data Strategy",
+    "BI & Measurement",
+    "AI-Ready Data"
+  ],
+  "shortDescription": "ʻIMI Analytics helps organizations simplify complex data environments, build trustworthy analytics, and create the architecture needed to make better decisions.",
+  "longDescription": "ʻIMI Analytics bridges business strategy and technical data architecture. We help organizations get beneath the dashboard—understanding the questions that matter, whether the underlying data can answer them, and what needs to change to make analytics reliable and useful.",
+  "brand": {
+    "background": "warm sand",
+    "primary": "deep teal/navy",
+    "accent": "coral",
+    "logo": "flower + data nodes"
+  }
+}
