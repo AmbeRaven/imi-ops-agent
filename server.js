@@ -13,10 +13,6 @@ app.use(express.json({ limit: '2mb' }));
 
 app.get('/health', (_req, res) => res.status(200).send('ok'));
 
-app.get('/', (_req, res) => {
-  res.send('IMI Ops Agent is live');
-});
-
 function authorized(req) {
   const expected = process.env.IMI_AGENT_PASSCODE;
   if (!expected) return false;
