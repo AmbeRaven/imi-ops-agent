@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ʻIMI Ops Agent</title>
+<style>
+:root{--sand:#f5efe4;--navy:#103b52;--teal:#157d7a;--coral:#e7654a;--card:#fffaf3}
+*{box-sizing:border-box}body{margin:0;background:var(--sand);color:var(--navy);font-family:system-ui,-apple-system,Segoe UI,sans-serif}.wrap{max-width:900px;margin:auto;padding:28px 18px 60px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px}.brand h1{font-family:Georgia,serif;margin:0;font-size:34px}.brand p{margin:3px 0;color:var(--teal);font-weight:700}.badge{font-size:12px;border:1px solid #c8bdae;border-radius:999px;padding:7px 10px;background:#fff8ed}.panel{background:rgba(255,255,255,.48);border:1px solid #d9cfc1;border-radius:16px;padding:20px;margin-top:18px}.buttons{display:flex;gap:10px;flex-wrap:wrap}button,a.button{border:0;border-radius:9px;padding:12px 15px;font-weight:800;cursor:pointer;text-decoration:none}.primary{background:var(--coral);color:white}.secondary{background:var(--teal);color:white}.ghost{background:#e8ded0;color:var(--navy)}textarea{width:100%;min-height:105px;border:1px solid #cfc3b5;border-radius:12px;padding:14px;font:inherit;background:#fffdf9;color:#17313f;margin-top:10px}.log{white-space:pre-wrap;background:#0e3548;color:#f9f3e8;border-radius:12px;padding:16px;min-height:110px;margin-top:14px}.approval{display:none;border:2px solid var(--coral)}.takeover{display:none;border:2px solid var(--teal)}.small{font-size:13px;color:#61737d}.profile{display:grid;grid-template-columns:1fr 1fr;gap:10px}.profile div{background:#fffaf3;border-radius:9px;padding:10px}.live{display:none;margin-top:12px}.live a{word-break:break-all;color:var(--teal);font-weight:700}@media(max-width:650px){.profile{grid-template-columns:1fr}.top{align-items:flex-start}.brand h1{font-size:29px}}
+</style>
+</head><body><main class="wrap">
+<div class="top"><div class="brand"><h1>ʻIMI Ops Agent</h1><p>Seek deeper. Click less.</p></div><div class="badge">PRIVATE CONTROL PANEL</div></div>
+<div class="panel"><strong>1. Start a browser</strong><p class="small">Creates a remote browser session. Use Live View whenever a site asks you to log in, verify, solve a CAPTCHA, or enter sensitive information.</p><div class="buttons"><button class="primary" id="start">Start Browser</button><a class="button secondary live" id="live" target="_blank">Open Live View</a></div></div>
+<div class="panel"><strong>2. Tell it what to do</strong><textarea id="command" placeholder="Example: Set up the ʻIMI Analytics Google Business Profile using our saved business details. Stop before publishing or submitting anything final."></textarea><div class="buttons"><button class="secondary" id="run">Run Task</button></div><div class="log" id="log">Start a browser session first.</div></div>
+<div class="panel approval" id="approval"><strong>Approval required</strong><p id="approvalText"></p><div class="buttons"><button class="primary" id="approve">Approve</button><button class="ghost" id="deny">Cancel</button></div></div>
+<div class="panel takeover" id="takeover"><strong>Your turn for a moment</strong><p id="takeoverText"></p><p class="small">Open Live View, complete only the manual step, then come back here.</p><div class="buttons"><a class="button secondary" id="takeoverLive" target="_blank">Open Live View</a><button class="ghost" id="resume">I’m done — continue</button></div></div>
+<div class="panel"><strong>Saved ʻIMI business profile</strong><div class="profile" id="profile"></div></div>
+</main>
+<script>
+const PASSCODE_KEY = 'imi_agent_passcode';
+function getPasscode(){
+  let p = localStorage.getItem(PASSCODE_KEY);
+  if(!p){ p = prompt('Enter your IMI Ops Agent passcode:') || ''; if(p) localStorage.setItem(PASSCODE_KEY,p); }
+  return p;
+}
+function apiFetch(url, options={}){
+  const headers = new Headers(options.headers || {});
+  headers.set('x-imi-passcode', getPasscode());
+  return fetch(url, {...options, headers});
+}
+
+let sessionId=null, liveUrl=null;
+const $=id=>document.getElementById(id); const log=t=>$('log').textContent=t;
+async function post(url,body){const r=await apiFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();if(!r.ok){if(r.status===401)localStorage.removeItem(PASSCODE_KEY);throw new Error(d.error||'Request failed')}return d}
+function handle(d){$('approval').style.display='none';$('takeover').style.display='none';if(d.status==='approval'){$('approval').style.display='block';$('approvalText').textContent=`${d.action}\n${d.reason}`;log('Paused for your approval.');return}if(d.status==='takeover'){$('takeover').style.display='block';$('takeoverText').textContent=d.reason;$('takeoverLive').href=liveUrl;log('Paused for manual takeover.');return}log(d.message||JSON.stringify(d,null,2))}
+$('start').onclick=async()=>{try{log('Starting secure remote browser…');const d=await post('/api/session',{});sessionId=d.sessionId;liveUrl=d.liveViewUrl;$('live').href=liveUrl;$('live').style.display='inline-block';$('takeoverLive').href=liveUrl;log('Browser ready. Tell me what you want done.')}catch(e){log(e.message)}};
+$('run').onclick=async()=>{if(!sessionId)return log('Start a browser first.');try{log('Working…');handle(await post('/api/command',{sessionId,command:$('command').value}))}catch(e){log(e.message)}};
+$('approve').onclick=async()=>{try{log('Executing approved action…');handle(await post('/api/approve',{sessionId,approved:true}))}catch(e){log(e.message)}};
+$('deny').onclick=async()=>{try{handle(await post('/api/approve',{sessionId,approved:false}))}catch(e){log(e.message)}};
+$('resume').onclick=async()=>{try{log('Resuming…');handle(await post('/api/resume',{sessionId}))}catch(e){log(e.message)}};
+apiFetch('/api/profile').then(r=>r.json()).then(p=>{$('profile').innerHTML=`<div><b>${p.businessName}</b><br>${p.tagline}</div><div><b>Website</b><br>${p.website}</div><div><b>Email</b><br>${p.email}</div><div><b>Services</b><br>${p.services.join(' · ')}</div>`})
+</script></body></html>
