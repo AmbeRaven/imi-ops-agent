@@ -188,40 +188,45 @@ async function executeTool(state, name, args) {
   throw new Error(`Unknown tool: ${name}`);
 }
 
-async function runAgent(state, userText) {
-  let response = await openai.responses.create({
-    model: process.env.OPENAI_MODEL || 'gpt-5.6',
-    instructions: systemInstructions(),
-    input: userText,
-    tools,
-    store: false
-  });
+async function continueAgent(state, history) {
+  const context = Array.isArray(history) ? [...history] : [{ role: 'user', content: String(history) }];
 
   for (let step = 0; step < 18; step++) {
+    const response = await openai.responses.create({
+      model: process.env.OPENAI_MODEL || 'gpt-5.6',
+      instructions: systemInstructions(),
+      input: context,
+      tools,
+      store: false,
+      include: ['reasoning.encrypted_content']
+    });
+
     const calls = response.output?.filter(x => x.type === 'function_call') || [];
     if (!calls.length) return { status: 'done', message: response.output_text || 'Done.' };
+
+    // With store:false we manage conversation state ourselves. Carry the model's
+    // output items (including reasoning/tool calls) forward instead of using
+    // previous_response_id, which requires server-side response state.
+    context.push(...(response.output || []));
 
     const outputs = [];
     for (const call of calls) {
       const args = JSON.parse(call.arguments || '{}');
       const result = await executeTool(state, call.name, args);
       if (result?.paused) {
-        state.pending = { call, args, result, previousResponseId: response.id };
+        state.pending = { call, args, result, history: [...context] };
         return { status: result.kind, ...result };
       }
       outputs.push({ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(result) });
     }
 
-    response = await openai.responses.create({
-      model: process.env.OPENAI_MODEL || 'gpt-5.6',
-      instructions: systemInstructions(),
-      previous_response_id: response.id,
-      input: outputs,
-      tools,
-      store: false
-    });
+    context.push(...outputs);
   }
   return { status: 'done', message: 'I reached the step limit. Tell me to continue and I’ll pick up from the current page.' };
+}
+
+async function runAgent(state, userText) {
+  return continueAgent(state, [{ role: 'user', content: userText }]);
 }
 
 app.get('/api/profile', (req, res) => res.json(businessProfile));
@@ -260,7 +265,7 @@ app.post('/api/approve', async (req, res) => {
       return res.json({ status: 'done', message: 'Cancelled. I did not take the action.' });
     }
 
-    const { call, args, previousResponseId, result } = pending;
+    const { call, args, history, result } = pending;
     let execution;
     if (call.name === 'click' || result.action?.startsWith('Click')) {
       const label = args.label || result.action?.match(/“(.+)”/)?.[1];
@@ -273,22 +278,12 @@ app.post('/api/approve', async (req, res) => {
     }
     state.pending = null;
 
-    let response = await openai.responses.create({
-      model: process.env.OPENAI_MODEL || 'gpt-5.6',
-      instructions: systemInstructions(),
-      previous_response_id: previousResponseId,
-      input: [{ type: 'function_call_output', call_id: call.call_id, output: JSON.stringify(execution) }],
-      tools,
-      store: false
-    });
-
-    // Continue any subsequent non-sensitive calls through the regular loop by giving the model context as a new command.
-    const text = response.output_text || 'Approved action completed. Continue from the current page.';
-    const calls = response.output?.filter(x => x.type === 'function_call') || [];
-    if (!calls.length) return res.json({ status: 'done', message: text });
-
-    // Use a simple continuation command to restart the guarded loop from current page.
-    res.json(await runAgent(state, 'Continue the task from the current browser state. The previously requested action was approved and completed.'));
+    const context = [...(history || []), {
+      type: 'function_call_output',
+      call_id: call.call_id,
+      output: JSON.stringify(execution)
+    }];
+    res.json(await continueAgent(state, context));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -296,6 +291,18 @@ app.post('/api/resume', async (req, res) => {
   try {
     const { sessionId } = req.body;
     const state = await connectSession(sessionId);
+    const pending = state.pending;
+
+    if (pending?.result?.kind === 'takeover' && pending.call?.call_id) {
+      state.pending = null;
+      const context = [...(pending.history || []), {
+        type: 'function_call_output',
+        call_id: pending.call.call_id,
+        output: JSON.stringify({ manualTakeoverCompleted: true, page: await snapshot(state.page) })
+      }];
+      return res.json(await continueAgent(state, context));
+    }
+
     state.pending = null;
     res.json(await runAgent(state, 'I completed the manual takeover step. Observe the current page and continue the task.'));
   } catch (e) { res.status(500).json({ error: e.message }); }
